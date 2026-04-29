@@ -7,6 +7,7 @@ async def init_db():
         await db.execute("""
             CREATE TABLE IF NOT EXISTS transactions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER,
                 type TEXT,
                 category TEXT,
                 amount REAL,

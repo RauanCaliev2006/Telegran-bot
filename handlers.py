@@ -1,11 +1,15 @@
 from aiogram import Router
-from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton
+from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton, FSInputFile
 from aiogram.fsm.context import FSMContext
 from aiogram.filters import Command
 from states import TransactionStates
 from database import DB_NAME
 import aiosqlite
 import datetime
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+import os
 
 router = Router()
 
@@ -124,8 +128,8 @@ async def process_date(message: Message, state: FSMContext):
     try:
         async with aiosqlite.connect(DB_NAME) as db:
             await db.execute(
-                "INSERT INTO transactions (type, category, amount, date) VALUES (?, ?, ?, ?)",
-                (data['type'], data['category'], data['amount'], data['date'])
+                "INSERT INTO transactions (user_id, type, category, amount, date) VALUES (?, ?, ?, ?, ?)",
+                (message.from_user.id, data['type'], data['category'], data['amount'], data['date'])
             )
             await db.commit()
     except Exception as e:
@@ -149,7 +153,7 @@ router.message.register(process_date, TransactionStates.date)
 
 async def cmd_history(message: Message, state: FSMContext):
     async with aiosqlite.connect(DB_NAME) as db:
-        cursor = await db.execute("SELECT id, type, category, amount, date FROM transactions ORDER BY id DESC LIMIT 20")
+        cursor = await db.execute("SELECT id, type, category, amount, date FROM transactions WHERE user_id = ? ORDER BY id DESC LIMIT 10", (message.from_user.id,))
         rows = await cursor.fetchall()
 
     if not rows:
@@ -166,10 +170,20 @@ async def cmd_history(message: Message, state: FSMContext):
 
 router.message.register(cmd_history, Command(commands=["history"]))
 
+# Клавиатура после баланса
+balance_keyboard = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="\U0001f4ca Показать график")],
+        [KeyboardButton(text=CANCEL_TEXT)]
+    ],
+    resize_keyboard=True,
+    one_time_keyboard=False
+)
+
 async def cmd_balance(message: Message, state: FSMContext):
     async with aiosqlite.connect(DB_NAME) as db:
         cursor = await db.execute(
-            "SELECT type, SUM(amount) FROM transactions GROUP BY type"
+            "SELECT type, SUM(amount) FROM transactions WHERE user_id = ? GROUP BY type", (message.from_user.id,)
         )
         rows = await cursor.fetchall()
 
@@ -187,70 +201,80 @@ async def cmd_balance(message: Message, state: FSMContext):
         f"\U0001f4c8 Доходы: {income}\n"
         f"\U0001f4c9 Расходы: {expense}\n"
         f"\U00002014\U00002014\U00002014\U00002014\U00002014\n"
-        f"Итого: {balance}"
+        f"Итого: {balance}\n\n"
+        f"Хочешь увидеть график?",
+        reply_markup=balance_keyboard
     )
 
 router.message.register(cmd_balance, Command(commands=["balance"]))
 
-async def cmd_delete_all(message: Message, state: FSMContext):
+# Генерация круговой диаграммы
+async def cmd_chart(message: Message, state: FSMContext):
     async with aiosqlite.connect(DB_NAME) as db:
-        await db.execute("DELETE FROM transactions")
-        await db.commit()
-    await message.answer("Все транзакции удалены.")
+        # Данные по типам
+        cursor = await db.execute(
+            "SELECT type, SUM(amount) FROM transactions WHERE user_id = ? GROUP BY type", (message.from_user.id,)
+        )
+        type_rows = await cursor.fetchall()
 
-router.message.register(cmd_delete_all, Command(commands=["delete"]))
+        # Данные по категориям расходов
+        cursor2 = await db.execute(
+            "SELECT category, SUM(amount) FROM transactions WHERE type='Расход' AND user_id = ? GROUP BY category", (message.from_user.id,)
+        )
+        expense_rows = await cursor2.fetchall()
 
-async def cmd_cancel(message: Message, state: FSMContext):
-    async with aiosqlite.connect(DB_NAME) as db:
-        cursor = await db.execute("SELECT id, type, category, amount, date FROM transactions ORDER BY id DESC LIMIT 10")
-        rows = await cursor.fetchall()
+        # Данные по категориям доходов
+        cursor3 = await db.execute(
+            "SELECT category, SUM(amount) FROM transactions WHERE type='Доход' AND user_id = ? GROUP BY category", (message.from_user.id,)
+        )
+        income_rows = await cursor3.fetchall()
 
-    if not rows:
-        await message.answer("Транзакций нет, нечего отменять.")
+    if not type_rows:
+        await message.answer("Транзакций нет, график невозможен.", reply_markup=main_keyboard)
         return
 
-    lines = ["Какую транзакцию отменить? Введи номер (ID):\n"]
-    for row in rows:
-        tid, ttype, cat, amount, date = row
-        emoji = "\U0001f4c8" if ttype == "Доход" else "\U0001f4c9"
-        lines.append(f"{emoji} #{tid} | {ttype} | {cat} | {amount} | {date}")
+    # Собираем все категории в одну диаграмму
+    labels = []
+    values = []
+    colors = []
+    color_income = ['#00d2ff', '#00b4d8', '#0096c7', '#0077b6', '#023e8a']
+    color_expense = ['#ff6b6b', '#ee5a24', '#f0932b', '#e056fd', '#be2edd', '#6c5ce7', '#fd79a8']
 
-    await message.answer("\n".join(lines))
-    await state.set_state(TransactionStates.cancel_id)
+    for i, row in enumerate(income_rows):
+        labels.append(f"{row[0]} (доход)")
+        values.append(row[1])
+        colors.append(color_income[i % len(color_income)])
 
-router.message.register(cmd_cancel, Command(commands=["cancel"]))
+    for i, row in enumerate(expense_rows):
+        labels.append(f"{row[0]} (расход)")
+        values.append(row[1])
+        colors.append(color_expense[i % len(color_expense)])
 
-async def process_cancel_id(message: Message, state: FSMContext):
-    if message.text == CANCEL_TEXT:
-        return await do_cancel(message, state)
-    try:
-        tid = int(message.text.strip().replace("#", ""))
-    except ValueError:
-        await message.answer("Введи корректный номер транзакции (только цифры).")
-        return
+    fig, ax = plt.subplots(figsize=(10, 8))
+    fig.patch.set_facecolor('#1a1a2e')
+    ax.set_facecolor('#1a1a2e')
 
-    async with aiosqlite.connect(DB_NAME) as db:
-        cursor = await db.execute("SELECT id, type, category, amount, date FROM transactions WHERE id = ?", (tid,))
-        row = await cursor.fetchone()
-
-        if not row:
-            await message.answer(f"Транзакция #{tid} не найдена. Попробуй ещё раз или /start для нового ввода.")
-            return
-
-        await db.execute("DELETE FROM transactions WHERE id = ?", (tid,))
-        await db.commit()
-
-    _, ttype, cat, amount, date = row
-    await state.clear()
-    await message.answer(
-        f"Транзакция отменена:\n"
-        f"#{tid} | {ttype} | {cat} | {amount} | {date}\n\n"
-        f"Выбери действие:",
-        reply_markup=main_keyboard
+    wedges, texts, autotexts = ax.pie(
+        values, labels=labels, autopct='%1.1f%%', colors=colors,
+        textprops={'color': 'white', 'fontsize': 11},
+        pctdistance=0.8, labeldistance=1.15
     )
-    await state.set_state(TransactionStates.type)
+    for t in autotexts:
+        t.set_fontsize(10)
 
-router.message.register(process_cancel_id, TransactionStates.cancel_id)
+    ax.set_title('Доходы и расходы по категориям', color='white', fontsize=16, fontweight='bold', pad=20)
+
+    plt.tight_layout()
+    chart_path = 'chart.png'
+    plt.savefig(chart_path, dpi=150, facecolor=fig.get_facecolor())
+    plt.close(fig)
+
+    photo = FSInputFile(chart_path)
+    await message.answer_photo(photo, caption="\U0001f4ca График доходов и расходов по категориям", reply_markup=main_keyboard)
+
+    os.remove(chart_path)
+
+router.message.register(cmd_chart, Command(commands=["chart"]))
 
 async def cmd_report(message: Message, state: FSMContext):
     await message.answer("Введи начальную дату (ДД.ММ.ГГГГ):")
@@ -284,17 +308,18 @@ async def process_report_to(message: Message, state: FSMContext):
     data = await state.get_data()
     date_from = data["report_from"]
     date_to_str = str(date_to)
+    uid = message.from_user.id
 
     async with aiosqlite.connect(DB_NAME) as db:
         cursor = await db.execute(
-            "SELECT id, type, category, amount, date FROM transactions WHERE date >= ? AND date <= ? ORDER BY date",
-            (date_from, date_to_str)
+            "SELECT id, type, category, amount, date FROM transactions WHERE user_id = ? AND date >= ? AND date <= ? ORDER BY date",
+            (uid, date_from, date_to_str)
         )
         rows = await cursor.fetchall()
 
         cursor2 = await db.execute(
-            "SELECT type, SUM(amount) FROM transactions WHERE date >= ? AND date <= ? GROUP BY type",
-            (date_from, date_to_str)
+            "SELECT type, SUM(amount) FROM transactions WHERE user_id = ? AND date >= ? AND date <= ? GROUP BY type",
+            (uid, date_from, date_to_str)
         )
         totals = await cursor2.fetchall()
 
@@ -341,6 +366,8 @@ async def menu_handler(message: Message, state: FSMContext):
         await cmd_history(message, state)
     elif text == "\U0001f4b0 Баланс":
         await cmd_balance(message, state)
+    elif text == "\U0001f4ca Показать график":
+        await cmd_chart(message, state)
     elif text == "\U0001f4c5 Отчёт по датам":
         await cmd_report(message, state)
     elif text == CANCEL_TEXT:

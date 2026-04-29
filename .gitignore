@@ -2,6 +2,7 @@ __pycache__/
 *.pyc
 config.py
 config_secret.py
+.env
 *.sqlite
 *.db
 venv/

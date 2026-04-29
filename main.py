@@ -1,9 +1,16 @@
 import asyncio
+import os
+from dotenv import load_dotenv
 from aiogram import Bot, Dispatcher
 from aiogram.fsm.storage.memory import MemoryStorage
 from handlers import router
-from config import TOKEN
 from database import init_db
+
+load_dotenv()
+
+TOKEN = os.getenv("BOT_TOKEN")
+if not TOKEN:
+    raise ValueError("Токен не найден! Создай файл .env с содержимым: BOT_TOKEN=твой_токен")
 
 bot = Bot(token=TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
