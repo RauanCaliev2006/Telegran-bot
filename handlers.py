@@ -10,6 +10,8 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import os
+from openpyxl import Workbook
+from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 
 router = Router()
 
@@ -23,8 +25,9 @@ main_keyboard = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="\U0001f4c8 Доход"), KeyboardButton(text="\U0001f4c9 Расход")],
         [KeyboardButton(text="\U0001f4cb История"), KeyboardButton(text="\U0001f4b0 Баланс")],
-        [KeyboardButton(text="\U0001f4c5 Отчёт по датам"), KeyboardButton(text="\u274c Отменить")],
-        [KeyboardButton(text="\U0001f5d1 Удалить запись"), KeyboardButton(text="\U0001f6ab Удалить всё")]
+        [KeyboardButton(text="\U0001f4c5 Отчёт по датам"), KeyboardButton(text="\U0001f4e5 Экспорт Excel")],
+        [KeyboardButton(text="\U0001f5d1 Удалить запись"), KeyboardButton(text="\U0001f6ab Удалить всё")],
+        [KeyboardButton(text="\u274c Отменить")]
     ],
     resize_keyboard=True,
     one_time_keyboard=False
@@ -401,6 +404,81 @@ async def process_cancel_id(message: Message, state: FSMContext):
 
 router.message.register(process_cancel_id, TransactionStates.cancel_id)
 
+async def cmd_export(message: Message, state: FSMContext):
+    uid = message.from_user.id
+    async with aiosqlite.connect(DB_NAME) as db:
+        cursor = await db.execute(
+            "SELECT id, type, category, amount, date FROM transactions WHERE user_id = ? ORDER BY date", (uid,)
+        )
+        rows = await cursor.fetchall()
+
+    if not rows:
+        await message.answer("Транзакций нет, нечего экспортировать.", reply_markup=main_keyboard)
+        return
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Транзакции"
+
+    header_font = Font(bold=True, color="FFFFFF", size=12)
+    header_fill = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
+    header_align = Alignment(horizontal="center")
+    thin_border = Border(
+        left=Side(style="thin"), right=Side(style="thin"),
+        top=Side(style="thin"), bottom=Side(style="thin")
+    )
+    income_fill = PatternFill(start_color="E2EFDA", end_color="E2EFDA", fill_type="solid")
+    expense_fill = PatternFill(start_color="FCE4EC", end_color="FCE4EC", fill_type="solid")
+
+    headers = ["ID", "Тип", "Категория", "Сумма", "Дата"]
+    for col, header in enumerate(headers, 1):
+        cell = ws.cell(row=1, column=col, value=header)
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = header_align
+        cell.border = thin_border
+
+    total_income = 0.0
+    total_expense = 0.0
+    for i, row in enumerate(rows, 2):
+        tid, ttype, cat, amount, date = row
+        ws.cell(row=i, column=1, value=tid).border = thin_border
+        ws.cell(row=i, column=2, value=ttype).border = thin_border
+        ws.cell(row=i, column=3, value=cat).border = thin_border
+        ws.cell(row=i, column=4, value=amount).border = thin_border
+        ws.cell(row=i, column=5, value=date).border = thin_border
+        if ttype == "Доход":
+            total_income += amount
+            for c in range(1, 6):
+                ws.cell(row=i, column=c).fill = income_fill
+        else:
+            total_expense += amount
+            for c in range(1, 6):
+                ws.cell(row=i, column=c).fill = expense_fill
+
+    summary_row = len(rows) + 3
+    ws.cell(row=summary_row, column=3, value="Итого доходы:").font = Font(bold=True)
+    ws.cell(row=summary_row, column=4, value=total_income).font = Font(bold=True, color="008000")
+    ws.cell(row=summary_row + 1, column=3, value="Итого расходы:").font = Font(bold=True)
+    ws.cell(row=summary_row + 1, column=4, value=total_expense).font = Font(bold=True, color="FF0000")
+    ws.cell(row=summary_row + 2, column=3, value="Баланс:").font = Font(bold=True, size=13)
+    ws.cell(row=summary_row + 2, column=4, value=total_income - total_expense).font = Font(bold=True, size=13)
+
+    ws.column_dimensions['A'].width = 8
+    ws.column_dimensions['B'].width = 12
+    ws.column_dimensions['C'].width = 18
+    ws.column_dimensions['D'].width = 14
+    ws.column_dimensions['E'].width = 14
+
+    file_path = f"report_{uid}.xlsx"
+    wb.save(file_path)
+
+    doc = FSInputFile(file_path, filename="Отчёт_транзакции.xlsx")
+    await message.answer_document(doc, caption="\U0001f4e5 Твой отчёт в Excel", reply_markup=main_keyboard)
+    os.remove(file_path)
+
+router.message.register(cmd_export, Command(commands=["export"]))
+
 async def menu_handler(message: Message, state: FSMContext):
     text = message.text
     if text in ["\U0001f4c8 Доход", "\U0001f4c9 Расход", "Доход", "Расход"]:
@@ -417,6 +495,8 @@ async def menu_handler(message: Message, state: FSMContext):
         await cmd_chart(message, state)
     elif text == "\U0001f4c5 Отчёт по датам":
         await cmd_report(message, state)
+    elif text == "\U0001f4e5 Экспорт Excel":
+        await cmd_export(message, state)
     elif text == CANCEL_TEXT:
         await do_cancel(message, state)
     elif text == "\U0001f5d1 Удалить запись":
