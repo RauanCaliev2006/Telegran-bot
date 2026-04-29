@@ -354,6 +354,53 @@ async def process_report_to(message: Message, state: FSMContext):
 
 router.message.register(process_report_to, TransactionStates.report_to)
 
+async def cmd_delete_all(message: Message, state: FSMContext):
+    uid = message.from_user.id
+    async with aiosqlite.connect(DB_NAME) as db:
+        await db.execute("DELETE FROM transactions WHERE user_id = ?", (uid,))
+        await db.commit()
+    await state.clear()
+    await message.answer("Все транзакции удалены!", reply_markup=main_keyboard)
+
+router.message.register(cmd_delete_all, Command(commands=["deleteall"]))
+
+async def cmd_cancel(message: Message, state: FSMContext):
+    await message.answer("Введи ID транзакции для удаления (можно посмотреть в истории):")
+    await state.set_state(TransactionStates.cancel_id)
+
+router.message.register(cmd_cancel, Command(commands=["cancel"]))
+
+async def process_cancel_id(message: Message, state: FSMContext):
+    if message.text == CANCEL_TEXT:
+        return await do_cancel(message, state)
+    try:
+        tid = int(message.text)
+    except ValueError:
+        await message.answer("Введи корректный ID (число).")
+        return
+
+    uid = message.from_user.id
+    async with aiosqlite.connect(DB_NAME) as db:
+        cursor = await db.execute(
+            "SELECT id, type, category, amount, date FROM transactions WHERE id = ? AND user_id = ?", (tid, uid)
+        )
+        row = await cursor.fetchone()
+        if not row:
+            await message.answer("Транзакция не найдена или не принадлежит тебе.")
+            await state.clear()
+            return
+        await db.execute("DELETE FROM transactions WHERE id = ? AND user_id = ?", (tid, uid))
+        await db.commit()
+
+    await state.clear()
+    await message.answer(
+        f"Транзакция #{row[0]} удалена!\n"
+        f"({row[1]} | {row[2]} | {row[3]} | {row[4]})",
+        reply_markup=main_keyboard
+    )
+
+router.message.register(process_cancel_id, TransactionStates.cancel_id)
+
 async def menu_handler(message: Message, state: FSMContext):
     text = message.text
     if text in ["\U0001f4c8 Доход", "\U0001f4c9 Расход", "Доход", "Расход"]:
