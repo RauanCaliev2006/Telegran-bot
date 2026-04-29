@@ -10,9 +10,7 @@ dp = Dispatcher(storage=MemoryStorage())
 dp.include_router(router)
 
 async def main():
-    # Удаляем старый webhook (если был), иначе polling не получит обновления
     await bot.delete_webhook(drop_pending_updates=True)
-    # Инициализируем базу данных (создаст таблицу, если её нет)
     await init_db()
     print("Бот запущен!")
     await dp.start_polling(bot)
