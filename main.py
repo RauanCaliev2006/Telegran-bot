@@ -1,5 +1,6 @@
 import asyncio
 import os
+from aiohttp import web
 from dotenv import load_dotenv
 from aiogram import Bot, Dispatcher
 from aiogram.fsm.storage.memory import MemoryStorage
@@ -16,10 +17,23 @@ bot = Bot(token=TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
 dp.include_router(router)
 
+async def health_check(request):
+    return web.Response(text="OK")
+
 async def main():
     await bot.delete_webhook(drop_pending_updates=True)
     await init_db()
-    print("Бот запущен!")
+
+    app = web.Application()
+    app.router.add_get("/", health_check)
+    runner = web.AppRunner(app)
+    await runner.setup()
+
+    port = int(os.getenv("PORT", 10000))
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
+
+    print(f"Бот запущен! Веб-сервер на порту {port}")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
