@@ -5,6 +5,5 @@ config_secret.py
 .env
 *.sqlite
 *.db
-token.enc
 venv/
 env/
