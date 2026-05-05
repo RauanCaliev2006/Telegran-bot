@@ -9,9 +9,16 @@ from database import init_db
 
 load_dotenv()
 
-TOKEN = os.getenv("BOT_TOKEN")
-if not TOKEN:
-    raise ValueError("Токен не найден! Создай файл .env с содержимым: BOT_TOKEN=твой_токен")
+# Приоритет: зашифрованный токен > обычный .env
+MASTER_KEY = os.getenv("MASTER_KEY")
+if MASTER_KEY:
+    from security import decrypt_token
+    TOKEN = decrypt_token(MASTER_KEY)
+    print("Токен загружен из зашифрованного файла (AES-128)")
+else:
+    TOKEN = os.getenv("BOT_TOKEN")
+    if not TOKEN:
+        raise ValueError("Токен не найден! Установи MASTER_KEY или BOT_TOKEN")
 
 bot = Bot(token=TOKEN)
 dp = Dispatcher(storage=MemoryStorage())

@@ -3,3 +3,4 @@ aiosqlite==0.22.1
 python-dotenv==1.2.2
 matplotlib==3.10.8
 openpyxl==3.1.5
+cryptography==48.0.0
