@@ -155,21 +155,24 @@ async def process_date(message: Message, state: FSMContext):
 router.message.register(process_date, TransactionStates.date)
 
 async def cmd_history(message: Message, state: FSMContext):
-    async with aiosqlite.connect(DB_NAME) as db:
-        cursor = await db.execute("SELECT id, type, category, amount, date FROM transactions WHERE user_id = ? ORDER BY id DESC LIMIT 10", (message.from_user.id,))
-        rows = await cursor.fetchall()
+    try:
+        async with aiosqlite.connect(DB_NAME) as db:
+            cursor = await db.execute("SELECT id, type, category, amount, date FROM transactions WHERE user_id = ? ORDER BY id DESC LIMIT 10", (message.from_user.id,))
+            rows = await cursor.fetchall()
 
-    if not rows:
-        await message.answer("Транзакций пока нет.")
-        return
+        if not rows:
+            await message.answer("Транзакций пока нет.", reply_markup=main_keyboard)
+            return
 
-    lines = ["Последние транзакции:\n"]
-    for row in rows:
-        tid, ttype, cat, amount, date = row
-        emoji = "\U0001f4c8" if ttype == "Доход" else "\U0001f4c9"
-        lines.append(f"{emoji} #{tid} | {ttype} | {cat} | {amount} | {date}")
+        lines = ["Последние транзакции:\n"]
+        for row in rows:
+            tid, ttype, cat, amount, date = row
+            emoji = "\U0001f4c8" if ttype == "Доход" else "\U0001f4c9"
+            lines.append(f"{emoji} #{tid} | {ttype} | {cat} | {amount} | {date}")
 
-    await message.answer("\n".join(lines))
+        await message.answer("\n".join(lines), reply_markup=main_keyboard)
+    except Exception as e:
+        await message.answer(f"Ошибка при загрузке истории: {e}", reply_markup=main_keyboard)
 
 router.message.register(cmd_history, Command(commands=["history"]))
 
@@ -184,30 +187,33 @@ balance_keyboard = ReplyKeyboardMarkup(
 )
 
 async def cmd_balance(message: Message, state: FSMContext):
-    async with aiosqlite.connect(DB_NAME) as db:
-        cursor = await db.execute(
-            "SELECT type, SUM(amount) FROM transactions WHERE user_id = ? GROUP BY type", (message.from_user.id,)
+    try:
+        async with aiosqlite.connect(DB_NAME) as db:
+            cursor = await db.execute(
+                "SELECT type, SUM(amount) FROM transactions WHERE user_id = ? GROUP BY type", (message.from_user.id,)
+            )
+            rows = await cursor.fetchall()
+
+        income = 0.0
+        expense = 0.0
+        for ttype, total in rows:
+            if ttype == "Доход":
+                income = total or 0.0
+            else:
+                expense = total or 0.0
+
+        balance = income - expense
+        await message.answer(
+            f"\U0001f4b0 Баланс:\n"
+            f"\U0001f4c8 Доходы: {income}\n"
+            f"\U0001f4c9 Расходы: {expense}\n"
+            f"\U00002014\U00002014\U00002014\U00002014\U00002014\n"
+            f"Итого: {balance}\n\n"
+            f"Хочешь увидеть график?",
+            reply_markup=balance_keyboard
         )
-        rows = await cursor.fetchall()
-
-    income = 0.0
-    expense = 0.0
-    for ttype, total in rows:
-        if ttype == "Доход":
-            income = total or 0.0
-        else:
-            expense = total or 0.0
-
-    balance = income - expense
-    await message.answer(
-        f"\U0001f4b0 Баланс:\n"
-        f"\U0001f4c8 Доходы: {income}\n"
-        f"\U0001f4c9 Расходы: {expense}\n"
-        f"\U00002014\U00002014\U00002014\U00002014\U00002014\n"
-        f"Итого: {balance}\n\n"
-        f"Хочешь увидеть график?",
-        reply_markup=balance_keyboard
-    )
+    except Exception as e:
+        await message.answer(f"Ошибка при расчёте баланса: {e}", reply_markup=main_keyboard)
 
 router.message.register(cmd_balance, Command(commands=["balance"]))
 
